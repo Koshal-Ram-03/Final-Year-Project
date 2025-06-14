@@ -1,0 +1,219 @@
+#include <Wire.h>
+#include <LiquidCrystal.h>
+#include <SoftwareSerial.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#define ONE_WIRE_BUS 7
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+SoftwareSerial phsensor(10, 11);
+LiquidCrystal lcd(12, 9, A0, A1, A2, A3);
+#include <EEPROM.h>
+#include "GravityTDS.h"
+int pHthreshold = 7;
+#define TdsSensorPin A5
+const int buzzer = 5;
+const int trigPin = 3; // Trigger pin
+const int echoPin = 4; // Echo pin
+int trubidity = A4;
+String pHval;
+float temperature1 = 25, tdsValue = 0;
+String msg;
+GravityTDS gravityTds;
+
+void setup() {
+  // Start the serial communication
+  Serial.begin(9600);
+  Serial2.begin(9600);
+  lcd.begin(16, 2);
+  // Initialize the sensor library
+  sensors.begin();
+  phsensor.begin(9600);
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  gravityTds.setPin(TdsSensorPin);
+  gravityTds.setAref(5.0);  //reference voltage on ADC, default 5.0V on Arduino UNO
+  gravityTds.setAdcRange(1024);  //1024 for 10bit ADC;4096 for 12bit ADC
+  gravityTds.begin();  //initialization
+  lcd.setCursor(0, 0);
+  lcd.print("Water Quality ");
+  lcd.setCursor(0, 1);
+  lcd.print("Monitor System");
+  delay(1000);
+}
+
+void loop() {
+  // Call sensors.requestTemperatures() to issue a global temperature request
+  if (phsensor.available() > 0) {
+    pHval = phsensor.readString();
+    int a = pHval.indexOf(':');
+    int b = pHval.indexOf(',');
+    a = a + 1;
+    pHval = pHval.substring(a, b);
+    //    Serial.print("PH Value: ");
+    //    Serial.print(pHval);
+    delay(1000);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("PH Value: ");
+    lcd.print(pHval.toInt());
+    delay(1000);
+
+    //    if (pHval.toFloat() <= pHthreshold) {
+    //      lcd.clear();
+    //      lcd.setCursor(0, 0);
+    //      lcd.print("PH Value: ");
+    //      lcd.print(pHval);
+    //      lcd.setCursor(0, 1);
+    //      lcd.print("High ph");
+    //      delay(1000);
+    //
+    //      msg = "PH VALUE IS HIGH:)";
+    //      SendMessage();
+    //      delay(1000);
+    //    }
+    //    else {
+    //      digitalWrite(buzzer, LOW);
+    //
+    //    }
+  }
+  sensors.requestTemperatures();
+  // Get the temperature in Celsius
+  int temperatureC = sensors.getTempCByIndex(0);
+  //  Serial.print("Temperature: ");
+  //  Serial.print(temperatureC);
+  //  Serial.println("°C");
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("TEMP:");
+  lcd.print(temperatureC);
+  delay(1000);
+
+
+
+
+  int Value = analogRead(trubidity);
+  //  Serial.println(value);
+  delay(1000);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Turbidity:");
+  lcd.print(Value);
+  delay(1000);
+
+
+
+  gravityTds.setTemperature(temperature1);  // set the temperature and execute temperature compensation
+  gravityTds.update();  //sample and calculate
+  tdsValue = gravityTds.getTdsValue();  // then get the value
+  //  Serial.print(tdsValue, 0);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("TDS value:");
+  lcd.print(tdsValue, 0);
+  delay(1000);
+  String str = "a" + String(Value) + "b" + String((pHval.toInt())) + "c" + String(tdsValue, 0) + "d" + String(temperatureC) + "e";
+  Serial.println(str);
+  delay(1000);
+  String data1 = "";
+  while (Serial.available() > 0) {
+    data1 = Serial.readString();
+  }
+
+  if (data1.indexOf('t') != -1 && data1.length() > 1) {
+    lcd.clear();
+    lcd.setCursor(0, 1);
+    lcd.print("received ML data");
+    delay(1000);
+
+    String a1 = data1.substring(1, 4);
+    String b1 = data1.substring(6, 9);
+    String c1 = data1.substring(11, 14);
+    String d1 = data1.substring(16, 19);
+
+
+    int a = a1.toInt();
+    int b = b1.toInt();
+    int c = c1.toInt();
+    int d = d1.toInt();
+
+    if  (a == 1 && b == 1 && c == 1 && d == 1) {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("water quality");
+      lcd.setCursor(0, 1);
+      lcd.print("good");
+      delay(1000);
+    }
+    if (a == 0) {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("water quality");
+      lcd.setCursor(0, 1);
+      lcd.print("bad");
+      delay(1000);
+      msg = "Solid particles in the water";
+      SendMessage();
+      delay(1000);
+
+    }
+    if (b == 0) {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("water quality");
+      lcd.setCursor(0, 1);
+      lcd.print("bad");
+      delay(1000);
+      msg = "High ph detected ";
+      SendMessage();
+      delay(1000);
+    }  if (c == 0) {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("water quality");
+      lcd.setCursor(0, 1);
+      lcd.print("bad");
+      delay(1000);
+      msg = "Disloved water detected";
+      SendMessage();
+      delay(1000);
+    }
+
+
+    if (d == 0) {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("water quality");
+      lcd.setCursor(0, 1);
+      lcd.print("bad");
+      delay(1000);
+      msg = "High temperature detected";
+      SendMessage();
+      delay(1000);
+
+
+    }
+
+  }
+
+
+}
+void SendMessage()
+{
+  Serial2.println("AT");
+  delay(500);
+  Serial2.println("ATE0");
+  delay(500);
+  Serial2.println("AT+CMGF=1");
+  delay(500);
+  Serial2.println("AT+CMGS=\"+916300369899\"");
+  delay(500);
+  Serial2.println(msg);
+  delay(500);
+  Serial2.write(26);
+  Serial2.println("Message sent..");
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("message sent..");
+  delay(2000);
+}

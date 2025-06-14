@@ -1,0 +1,230 @@
+/*
+ * Water Quality Monitor System
+ *
+ * This program reads water quality data from several sensors:
+ * - pH sensor (via SoftwareSerial)
+ * - Temperature sensor (DS18B20 via OneWire)
+ * - Turbidity sensor (analog input)
+ * - TDS sensor (using the GravityTDS library)
+ *
+ * The sensor values are displayed on a 16x2 LCD and transmitted over serial.
+ * Additionally, the code parses incoming serial data to trigger alert messages
+ * via a GSM module (using Serial2) if any water quality parameter indicates poor quality.
+ */
+
+#include <Wire.h>
+#include <LiquidCrystal.h>
+#include <SoftwareSerial.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <EEPROM.h>
+#include "GravityTDS.h"
+
+// Sensor definitions and hardware setups
+#define ONE_WIRE_BUS 7                  // DS18B20 temperature sensor on pin 7
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+
+// pH sensor setup using SoftwareSerial (pins 10 and 11)
+SoftwareSerial phsensor(10, 11);
+
+// LCD initialization (RS, E, D4, D5, D6, D7)
+LiquidCrystal lcd(12, 9, A0, A1, A2, A3);
+
+// Other sensor and actuator definitions
+int pHthreshold = 7;
+#define TdsSensorPin A5                // TDS sensor analog pin
+const int buzzer = 5;                   // Buzzer (not actively used in this version)
+const int trigPin = 3;                  // Unused trigger pin (e.g., for ultrasonic sensor)
+const int echoPin = 4;                  // Unused echo pin (e.g., for ultrasonic sensor)
+int turbidityPin = A4;                  // Turbidity sensor analog pin
+
+// Global variables for sensor values and messages
+String pHval;
+float fixedTemp = 25;                   // Fixed temperature for TDS compensation
+float tdsValue = 0;
+String msg;
+
+// GravityTDS sensor instance for TDS measurements
+GravityTDS gravityTds;
+
+void setup() {
+  // Initialize serial communications and LCD
+  Serial.begin(9600);
+  Serial2.begin(9600);                  // Ensure your board supports Serial2 (e.g., Arduino Mega)
+  lcd.begin(16, 2);
+
+  // Initialize sensors and modules
+  sensors.begin();
+  phsensor.begin(9600);
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  // Initialize TDS sensor settings
+  gravityTds.setPin(TdsSensorPin);
+  gravityTds.setAref(5.0);
+  gravityTds.setAdcRange(1024);
+  gravityTds.begin();
+
+  // Display welcome message on LCD
+  lcd.setCursor(0, 0);
+  lcd.print("Water Quality");
+  lcd.setCursor(0, 1);
+  lcd.print("Monitor System");
+  delay(1000);
+}
+
+void loop() {
+  // Read pH sensor data if available, extract the numeric value, and display it.
+  if (phsensor.available() > 0) {
+    pHval = phsensor.readString();
+    int startIdx = pHval.indexOf(':') + 1;
+    int endIdx = pHval.indexOf(',');
+    if (startIdx > 0 && endIdx > startIdx) {
+      pHval = pHval.substring(startIdx, endIdx);
+    }
+    delay(1000);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("PH Value: ");
+    lcd.print(pHval.toInt());
+    delay(1000);
+  }
+
+  // Request and display temperature from the DS18B20 sensor.
+  sensors.requestTemperatures();
+  int temperatureC = sensors.getTempCByIndex(0);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("TEMP:");
+  lcd.print(temperatureC);
+  delay(1000);
+
+  // Read and display turbidity sensor value.
+  int turbidityValue = analogRead(turbidityPin);
+  delay(1000);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Turbidity:");
+  lcd.print(turbidityValue);
+  delay(1000);
+
+  // Update and display TDS sensor value using the fixed temperature for compensation.
+  gravityTds.setTemperature(fixedTemp);
+  gravityTds.update();
+  tdsValue = gravityTds.getTdsValue();
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("TDS value:");
+  lcd.print(tdsValue, 0);
+  delay(1000);
+
+  // Combine sensor data into a formatted string and output via Serial.
+  String dataOut = "a" + String(turbidityValue) +
+                   "b" + String(pHval.toInt()) +
+                   "c" + String(tdsValue, 0) +
+                   "d" + String(temperatureC) + "e";
+  Serial.println(dataOut);
+  delay(1000);
+
+  // Check for incoming serial data that may contain ML (machine learning) predictions.
+  String dataIn = "";
+  while (Serial.available() > 0) {
+    dataIn = Serial.readString();
+  }
+
+  // If ML data is received, parse specific values and determine water quality.
+  if (dataIn.indexOf('t') != -1 && dataIn.length() > 1) {
+    lcd.clear();
+    lcd.setCursor(0, 1);
+    lcd.print("received ML data");
+    delay(1000);
+
+    // Extract expected substrings representing sensor conditions.
+    String aStr = dataIn.substring(1, 4);
+    String bStr = dataIn.substring(6, 9);
+    String cStr = dataIn.substring(11, 14);
+    String dStr = dataIn.substring(16, 19);
+
+    int aVal = aStr.toInt();
+    int bVal = bStr.toInt();
+    int cVal = cStr.toInt();
+    int dVal = dStr.toInt();
+
+    // Condition: All sensor flags good
+    if (aVal == 1 && bVal == 1 && cVal == 1 && dVal == 1) {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Water Quality");
+      lcd.setCursor(0, 1);
+      lcd.print("Good");
+      delay(1000);
+    }
+    // Condition: Specific sensor flags indicating problems
+    if (aVal == 0) {   // Example: Solid particles detected
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Water Quality");
+      lcd.setCursor(0, 1);
+      lcd.print("Bad");
+      delay(1000);
+      msg = "Solid particles in the water";
+      SendMessage();
+      delay(1000);
+    }
+    if (bVal == 0) {   // Example: High pH detected
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Water Quality");
+      lcd.setCursor(0, 1);
+      lcd.print("Bad");
+      delay(1000);
+      msg = "High pH detected";
+      SendMessage();
+      delay(1000);
+    }
+    if (cVal == 0) {   // Example: Dissolved water issue detected
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Water Quality");
+      lcd.setCursor(0, 1);
+      lcd.print("Bad");
+      delay(1000);
+      msg = "Dissolved water detected";
+      SendMessage();
+      delay(1000);
+    }
+    if (dVal == 0) {   // Example: High temperature detected
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Water Quality");
+      lcd.setCursor(0, 1);
+      lcd.print("Bad");
+      delay(1000);
+      msg = "High temperature detected";
+      SendMessage();
+      delay(1000);
+    }
+  }
+}
+
+// Function to send SMS alert via a GSM module using AT commands.
+void SendMessage() {
+  Serial2.println("AT");
+  delay(500);
+  Serial2.println("ATE0");
+  delay(500);
+  Serial2.println("AT+CMGF=1");
+  delay(500);
+  Serial2.println("AT+CMGS=\"+916300369899\"");
+  delay(500);
+  Serial2.println(msg);
+  delay(500);
+  Serial2.write(26);  // Ctrl+Z: Indicates end of message
+  Serial2.println("Message sent..");
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Message sent..");
+  delay(2000);
+}
